@@ -1,0 +1,9 @@
+name: Suite ref check
+on: workflow_dispatch
+jobs:
+  suite-ref:
+    uses: openziti/ziti-tunnel-sdk-c/.github/workflows/integration-tests.yml@fix-test-flakes
+    with:
+      tests-repo: openziti/ziti-tunnel-sdk-c
+      zetA-version: v1.18.3
+      label: suite-ref-check
