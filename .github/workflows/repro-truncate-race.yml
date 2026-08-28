@@ -1,0 +1,20 @@
+name: Repro config.json truncate race
+on: workflow_dispatch
+
+jobs:
+  call-cmake-build:
+    uses: ./.github/workflows/cmake.yml
+
+  integration-tests:
+    needs: [ call-cmake-build ]
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ]
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      ziti-ref: main
+      label: repro-${{ matrix.attempt }}
+      auth: Legacy
+      slow-tests: true
+    secrets: inherit
