@@ -29,6 +29,7 @@
 #include <ziti/ziti_dns.h>
 #include "ziti/ziti_tunnel_cbs.h"
 #include "ziti_hosting.h"
+#include "health_checks.h"
 #include "ziti_instance.h"
 #include "../ziti-tunnel/tunnel_l2.h"
 #include "lwip/err.h"
@@ -507,6 +508,21 @@ void ziti_host_set_conn(ziti_context ztx, const char *service_name, ziti_connect
     zh->serv = serv;
 }
 
+void ziti_host_release_conn(ziti_context ztx, const char *service_name, const host_ctx_t *host_ctx) {
+    struct ziti_instance_s *ziti_instance = ziti_app_ctx(ztx);
+    ziti_host_t *zh = model_map_get(&ziti_instance->hosts, service_name);
+    // NULL: stop_hosting already removed it and is the one that closed the connection.
+    // Mismatch: a config change replaced the host under this name, host_ctx belongs to the old one.
+    // Matched on host_ctx rather than serv because a failed listen closes before serv is ever recorded.
+    if (zh == NULL || zh->host_ctx != host_ctx) {
+        return;
+    }
+
+    ZITI_LOG(DEBUG, "hosted_service[%s] connection closed, releasing handle", service_name);
+    zh->serv = NULL;
+    zh->host_ctx = NULL;
+}
+
 // only do matching on based on wildcard domain here
 static const ziti_address *intercept_match_addr(ip_addr_t *addr, void *ctx) {
     ziti_intercept_t *zi_ctx = ctx;
@@ -604,18 +620,18 @@ static void stop_intercept(struct tunneler_ctx_s *tnlr, struct ziti_instance_s *
 
 static void stop_hosting(struct ziti_instance_s *inst, ziti_host_t *zh) {
     model_map_remove(&inst->hosts, zh->service_name);
+    if (zh->host_ctx) {
+        // the checks read zh->cfg on every interval and ziti_close_server is asynchronous,
+        // so they must stop before free_ziti_host below, not in the close callback
+        host_health_checks_stop(zh->host_ctx->health_checks);
+        zh->host_ctx->health_checks = NULL;
+    }
     if (zh->serv) {
-        // the normal path: ziti_close()'s callback (ziti_hosted_serv_conn_close_cb) is
-        // where free_hosted_service_ctx() actually runs, once ziti-sdk-c has finished
-        // tearing this connection down. Safe even if the connection is already in some
-        // failed/rebinding state -- ziti_close() itself handles "already closing".
+        // ziti_hosted_serv_conn_close_cb frees host_ctx once the SDK has torn the connection down
         ziti_close(zh->serv, ziti_hosted_serv_conn_close_cb);
     } else if (zh->host_ctx) {
-        // bind never completed (zh->serv was never set), so there's no connection to
-        // hang a close callback off of. Free the hosting context directly instead:
-        // skipping this used to just leak host_ctx harmlessly, but its health check
-        // engine (if any) keeps its timers running otherwise, referencing zh->cfg, which
-        // free_ziti_host() below is about to free out from under them.
+        // no connection to hang a close callback off: either the bind never completed, or the
+        // connection already closed and ziti_host_release_conn was never reached
         free_hosted_service_ctx(zh->host_ctx);
     }
     free_ziti_host(zh);
