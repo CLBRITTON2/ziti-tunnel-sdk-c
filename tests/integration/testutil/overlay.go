@@ -28,11 +28,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -82,9 +84,10 @@ type Overlay struct {
 	// reliably takes it down.
 	DetachSession bool
 
-	cmd     *exec.Cmd
-	logFile *os.File
-	Done    chan error
+	cmd       *exec.Cmd
+	logFile   *os.File
+	Done      chan error
+	stackOnce sync.Once
 }
 
 func (o *Overlay) ctrlPort() int {
@@ -1032,6 +1035,9 @@ func (o *Overlay) execZiti(cmd string, args ...string) ([]byte, error) {
 		fmt.Println("COMMAND: " + ziti.String())
 	}
 	if err := ziti.Run(); err != nil {
+		if strings.Contains(stderr.String(), "Client.Timeout exceeded") {
+			o.captureControllerStack()
+		}
 		return nil, fmt.Errorf("%s %v: %w\nstdout: %s\nstderr: %s",
 			o.ZitiBin, argv, err, stdout.String(), stderr.String())
 	}
@@ -1039,6 +1045,35 @@ func (o *Overlay) execZiti(cmd string, args ...string) ([]byte, error) {
 		fmt.Println("COMMAND RESULT: \n" + stdout.String())
 	}
 	return []byte(stdout.String()), nil
+}
+
+// captureControllerStack writes the quickstart controller's goroutine dump to quickstart-logs/controller-stack.log,
+// once per overlay. A CLI call timing out is the first sign of the controller wedge, and only a dump taken while it
+// holds names the lock it is stuck on. Single node only: a cluster's controllers are child processes of o.cmd.
+func (o *Overlay) captureControllerStack() {
+	o.stackOnce.Do(func() {
+		if o.cmd == nil || o.cmd.Process == nil {
+			log.Printf("overlay: no quickstart process to dump, controller=%s", o.ControllerHostPort())
+			return
+		}
+		if o.ZitiClusterSize > 1 {
+			log.Printf("overlay: no stack dump for a cluster, cluster_size=%d", o.ZitiClusterSize)
+			return
+		}
+		// Built exactly as ziti's quickstart.go builds its own agent address, path.Join included.
+		agentAddr := "unix:" + path.Join(os.TempDir(), fmt.Sprintf("gops-agent.%d.sock", o.cmd.Process.Pid))
+		stack, err := exec.Command(o.ZitiBin, "agent", "stack", "--app-addr", agentAddr).CombinedOutput()
+		if err != nil {
+			log.Printf("overlay: controller stack dump failed, app_addr=%s err=%v output=%s", agentAddr, err, stack)
+			return
+		}
+		stackPath := filepath.Join(o.Home, "quickstart-logs", "controller-stack.log")
+		if err := os.WriteFile(stackPath, stack, 0o644); err != nil {
+			log.Printf("overlay: controller stack dump not written, path=%s err=%v", stackPath, err)
+			return
+		}
+		log.Printf("overlay: controller stack dump written, path=%s", stackPath)
+	})
 }
 
 // PurgeIdentities deletes every identity carrying a test name.
