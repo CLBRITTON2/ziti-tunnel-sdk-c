@@ -5,9 +5,40 @@ jobs:
   call-cmake-build:
     uses: ./.github/workflows/cmake.yml
 
+  # One ziti main commit for every job, so a mid-run push to ziti main cannot split the sample.
+  resolve-ziti-ref:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - id: sha
+        run: echo "sha=$(git ls-remote https://github.com/openziti/ziti refs/heads/main | cut -f1)" >> "$GITHUB_OUTPUT"
+
+  # Built once per OS: 90 parallel source builds draw proxy.golang.org stream errors.
+  build-ziti:
+    needs: [ resolve-ziti-ref ]
+    strategy:
+      matrix:
+        os:
+          - { runner: ubuntu-latest, ziti-os: linux }
+          - { runner: macos-15, ziti-os: darwin }
+          - { runner: windows-2022, ziti-os: windows }
+    runs-on: ${{ matrix.os.runner }}
+    steps:
+      - uses: openziti/ziti/setup-cli@main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          ref: ${{ needs.resolve-ziti-ref.outputs.sha }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.os.ziti-os }}-soak
+          path: ${{ runner.temp }}/ziti-cli/bin/ziti*
+          if-no-files-found: error
+
   integration-tests:
     name: Integration Tests (${{ matrix.topology.label }}-${{ matrix.attempt }})
-    needs: [ call-cmake-build ]
+    needs: [ call-cmake-build, build-ziti ]
     strategy:
       fail-fast: false
       matrix:
@@ -18,7 +49,7 @@ jobs:
           - { label: main-legacy-auth, cluster-size: "", auth: Legacy }
     uses: ./.github/workflows/integration-tests.yml
     with:
-      ziti-ref: main
+      ziti-artifact: soak
       label: ${{ matrix.topology.label }}-${{ matrix.attempt }}
       cluster-size: ${{ matrix.topology.cluster-size }}
       auth: ${{ matrix.topology.auth }}
