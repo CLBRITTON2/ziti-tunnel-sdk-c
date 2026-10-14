@@ -196,6 +196,11 @@ func repeatedRestartsKeepOfferingCodePrompt(t *testing.T) {
 			updatedEvent := state.zetClient.WaitForIdentityEvent(t, "updated", idName)
 			updatedEvent.AssertMfaAuthenticated()
 
+			// identity:updated goes out before the config.json save, mfa_auth_status after it, and the next
+			// pass's Restart is a kill that would otherwise land mid-write
+			authStatusEvent := state.zetClient.WaitForMfaEvent(t, "mfa_auth_status", idName)
+			authStatusEvent.AssertSuccess()
+
 			persisted := state.zetClient.PersistedIdentity(t, enrollment.Identifier)
 			require.Equal(t, true, persisted["MfaEnabled"], "config.json says MfaEnabled=%v after restart %d of %q", persisted["MfaEnabled"], pass+1, idName)
 		}
