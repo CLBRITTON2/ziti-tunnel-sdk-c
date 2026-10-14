@@ -1,0 +1,26 @@
+name: Soak integration tests (10x per topology)
+on: workflow_dispatch
+
+jobs:
+  call-cmake-build:
+    uses: ./.github/workflows/cmake.yml
+
+  integration-tests:
+    name: Integration Tests (${{ matrix.topology.label }}-${{ matrix.attempt }})
+    needs: [ call-cmake-build ]
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ]
+        topology:
+          - { label: main, cluster-size: "", auth: OIDC }
+          - { label: main-ha, cluster-size: "3", auth: OIDC }
+          - { label: main-legacy-auth, cluster-size: "", auth: Legacy }
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      ziti-ref: main
+      label: ${{ matrix.topology.label }}-${{ matrix.attempt }}
+      cluster-size: ${{ matrix.topology.cluster-size }}
+      auth: ${{ matrix.topology.auth }}
+      slow-tests: true
+    secrets: inherit
