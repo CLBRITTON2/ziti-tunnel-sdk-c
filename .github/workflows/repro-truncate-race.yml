@@ -12,7 +12,7 @@ jobs:
       sha: ${{ steps.sha.outputs.sha }}
     steps:
       - id: sha
-        run: echo "sha=$(git ls-remote https://github.com/openziti/ziti refs/heads/main | cut -f1)" >> "$GITHUB_OUTPUT"
+        run: echo "sha=$(git ls-remote https://github.com/openziti/ziti refs/heads/fix.4611.posture-nested-read-deadlock | cut -f1)" >> "$GITHUB_OUTPUT"
 
   # Built once per OS: 90 parallel source builds draw proxy.golang.org stream errors.
   build-ziti:
